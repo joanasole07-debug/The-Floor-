@@ -195,7 +195,7 @@ pip install pillow matplotlib ollama
 
 Instalar Ollama:
 
-👉 https://ollama.com/
+https://ollama.com/
 
 Executar o modelo:
 
