@@ -1,8 +1,8 @@
-# 🎮 The Floor Portugal — Engine Profissional
+# The Floor Game
 
-## 📌 Descrição do Projeto
+##  Descrição do Projeto
 
-**The Floor Portugal** é uma adaptação digital do famoso concurso televisivo *The Floor*, desenvolvida em **Python** no âmbito da unidade curricular de **Programação de Computadores II** da Escola de Engenharia da Universidade do Minho.
+**The Floor Game** é uma adaptação digital do famoso concurso televisivo *The Floor*, desenvolvida em **Python** no âmbito da unidade curricular de **Programação de Computadores II** da Escola de Engenharia da Universidade do Minho.
 
 O objetivo principal do projeto consiste em recriar a dinâmica estratégica e competitiva do programa televisivo através de uma aplicação gráfica interativa, combinando:
 
@@ -16,9 +16,8 @@ O objetivo principal do projeto consiste em recriar a dinâmica estratégica e c
 
 O jogo foi concebido com base no protocolo fornecido pelos docentes, respeitando os requisitos funcionais e técnicos definidos para o trabalho prático.
 
----
 
-# 🧠 Conceito do Jogo
+# Conceito do Jogo
 
 O jogo decorre num tabuleiro de **10x10**, representando um total de **100 participantes**, onde:
 
@@ -31,11 +30,10 @@ O jogo decorre num tabuleiro de **10x10**, representando um total de **100 parti
 
 Os duelos são realizados através de perguntas de cultura geral associadas à categoria do jogador desafiado.
 
----
 
-# ⚙️ Funcionalidades Implementadas
+# Funcionalidades Implementadas
 
-## ✅ Sistema de Tabuleiro
+## Sistema de Tabuleiro
 
 - Tabuleiro dinâmico 10x10;
 - Gestão automática de territórios;
@@ -43,9 +41,8 @@ Os duelos são realizados através de perguntas de cultura geral associadas à c
 - Verificação de vizinhança válida;
 - Atualização visual em tempo real.
 
----
 
-## ✅ Gestão de Jogadores
+## Gestão de Jogadores
 
 Cada jogador possui:
 
@@ -57,9 +54,8 @@ Cada jogador possui:
 - contagem de vitórias;
 - histórico de respostas.
 
----
 
-## ✅ Sistema de Duelos
+## Sistema de Duelos
 
 O motor de duelos inclui:
 
@@ -71,9 +67,8 @@ O motor de duelos inclui:
 - eliminação automática;
 - fluxo de continuação estratégica.
 
----
 
-## ✅ Inteligência Artificial (OLLAMA)
+## Inteligência Artificial (OLLAMA)
 
 O projeto integra o modelo **Llama3** através da biblioteca **Ollama**, permitindo:
 
@@ -83,9 +78,8 @@ O projeto integra o modelo **Llama3** através da biblioteca **Ollama**, permiti
 - aceitação de sinónimos;
 - avaliação contextual das respostas.
 
----
 
-## ✅ Persistência de Dados
+## Persistência de Dados
 
 O sistema suporta:
 
@@ -95,9 +89,8 @@ O sistema suporta:
 - armazenamento em ficheiros JSON;
 - recuperação segura de estados.
 
----
 
-## ✅ Estatísticas e Relatórios
+## Estatísticas e Relatórios
 
 O jogo gera automaticamente:
 
@@ -110,9 +103,8 @@ O jogo gera automaticamente:
 
 Os gráficos são produzidos através da biblioteca **Matplotlib**.
 
----
 
-# 🖥️ Interface Gráfica
+# Interface Gráfica
 
 A aplicação utiliza **Tkinter** para fornecer:
 
@@ -129,10 +121,9 @@ O design foi inspirado em interfaces modernas com:
 - cores neon;
 - organização modular;
 - componentes reutilizáveis.
+  
 
----
-
-# 🧱 Estrutura Modular do Código
+# Estrutura Modular do Código
 
 O projeto encontra-se organizado em múltiplos módulos lógicos:
 
@@ -151,9 +142,8 @@ Esta abordagem promove:
 - escalabilidade futura;
 - separação de responsabilidades.
 
----
 
-# 📂 Estrutura de Ficheiros
+# Estrutura de Ficheiros
 
 ```bash
 TheFloor/
@@ -173,9 +163,8 @@ TheFloor/
 └── main.py
 ```
 
----
 
-# 🛠️ Tecnologias Utilizadas
+# Tecnologias Utilizadas
 
 ## Linguagem
 
@@ -192,19 +181,17 @@ TheFloor/
 - Random
 - Ollama
 
----
 
-# 🚀 Como Executar
+# Como Executar
 
-## 1️⃣ Instalar Dependências
+## Instalar Dependências
 
 ```bash
 pip install pillow matplotlib ollama
 ```
 
----
 
-## 2️⃣ Instalar e Configurar Ollama
+## Instalar e Configurar Ollama
 
 Instalar Ollama:
 
@@ -216,17 +203,15 @@ Executar o modelo:
 ollama run llama3
 ```
 
----
 
-## 3️⃣ Executar o Projeto
+## Executar o Projeto
 
 ```bash
 python main.py
 ```
 
----
 
-# 📊 Funcionalidades Avançadas
+# Funcionalidades Avançadas
 
 O projeto inclui várias funcionalidades extra valorizadas no protocolo:
 
@@ -239,9 +224,8 @@ O projeto inclui várias funcionalidades extra valorizadas no protocolo:
 - persistência robusta;
 - interface gráfica avançada.
 
----
 
-# 📚 Objetivos Académicos Cumpridos
+# Objetivos Académicos Cumpridos
 
 Este projeto demonstra a aplicação prática dos seguintes conteúdos:
 
@@ -257,9 +241,8 @@ Este projeto demonstra a aplicação prática dos seguintes conteúdos:
 - geração de estatísticas;
 - integração de APIs externas.
 
----
 
-# 🔮 Melhorias Futuras
+# Melhorias Futuras
 
 Possíveis evoluções do projeto:
 
@@ -273,20 +256,18 @@ Possíveis evoluções do projeto:
 - modo espectador;
 - ranking global online.
 
----
 
-# 👨‍💻 Autores
+# Autores
 
 Projeto desenvolvido no âmbito da unidade curricular:
 
 **Programação de Computadores II**  
 Universidade do Minho — Escola de Engenharia
 
----
 
-# 🏆 Conclusão
+# Conclusão
 
-O projeto **The Floor Portugal — Engine Profissional** representa uma implementação completa e avançada do conceito do concurso televisivo “The Floor”, combinando programação em Python, inteligência artificial, persistência de dados, estatísticas e interfaces gráficas modernas.
+O projeto **The Floor Game** representa uma implementação completa e avançada do conceito do concurso televisivo “The Floor”, combinando programação em Python, inteligência artificial, persistência de dados, estatísticas e interfaces gráficas modernas.
 
 Além de cumprir os requisitos definidos no protocolo do trabalho prático, o projeto demonstra capacidades avançadas de organização de software, modularização e desenvolvimento de aplicações interativas.
 
