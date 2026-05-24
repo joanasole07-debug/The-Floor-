@@ -3460,21 +3460,18 @@ def generate_massive_trivia():
     ]
     return data
 
-# =================================================================
-# 2. LÓGICA DE JOGO E UNICIDADE
-# =================================================================
 TRIVIA_DATA = generate_massive_trivia()
 ALL_CATS = list(TRIVIA_DATA.keys())
 
 def get_unique_question(cat):
     global TRIVIA_DATA
     if cat not in TRIVIA_DATA or len(TRIVIA_DATA[cat]) == 0:
-        return {"pergunta": "Perguntas esgotadas! (Responda 'ok')", "resposta": "ok"}
+        return {"pergunta": "Perguntas esgotadas! (Responda '1')", "resposta": "1"}
     idx = random.randrange(len(TRIVIA_DATA[cat]))
     return TRIVIA_DATA[cat].pop(idx)
 
 # =================================================================
-# 2. INTERFACE E LÓGICA
+# 2. LÓGICA DO JOGO
 # =================================================================
 class Theme:
     BG = "#05070A"; CARD = "#10141D"; ACCENT = "#00F2FF"; TEXT = "#E1E7EF"; WARN = "#FFCC00"
@@ -3494,7 +3491,7 @@ class TheFloorGame:
         frame = tk.Frame(self.root, bg=Theme.BG)
         frame.place(relx=0.5, rely=0.5, anchor="center")
         tk.Label(frame, text="THE FLOOR", font=("Impact", 100), fg=Theme.ACCENT, bg=Theme.BG).pack()
-        tk.Button(frame, text="JOGAR", font=("Segoe UI", 16, "bold"), bg=Theme.ACCENT, 
+        tk.Button(frame, text="INICIAR JOGO", font=("Segoe UI", 16, "bold"), bg=Theme.ACCENT, 
                   command=self.setup_game, padx=50, pady=20).pack(pady=40)
 
     def setup_game(self):
@@ -3504,7 +3501,15 @@ class TheFloorGame:
             self.players.append({"id": i, "name": f"P{i+1}", "color": color, "cells": 1, "time": 45.0, "active": True})
         
         plist = list(self.players); random.shuffle(plist)
-        self.board = [[{"owner": plist.pop(), "cat": random.choice(ALL_CATS)} for _ in range(10)] for _ in range(10)]
+        # Inicializa o tabuleiro: cada célula tem um dono e a categoria desse dono
+        self.board = []
+        for r in range(10):
+            row = []
+            for c in range(10):
+                p = plist.pop()
+                row.append({"owner": p, "cat": random.choice(ALL_CATS)})
+            self.board.append(row)
+        
         self.pick_random_attacker()
 
     def pick_random_attacker(self):
@@ -3514,17 +3519,22 @@ class TheFloorGame:
         title = canvas.create_text(625, 400, text="SORTEANDO ATACANTE...", fill="white", font=("Segoe UI", 30, "bold"))
         
         active_ps = [p for p in self.players if p["active"]]
-        for i in range(15):
+        if not active_ps: return
+        
+        for i in range(12):
             p = random.choice(active_ps)
             canvas.itemconfig(title, text=f"ATACANTE: {p['name']}", fill=p['color'])
             self.root.update(); time.sleep(0.08)
             
         self.current_player_id = random.choice(active_ps)["id"]
-        # Garante que o novo atacante começa com 45 segundos
-        p_obj = next(p for p in self.players if p["id"] == self.current_player_id)
-        p_obj["time"] = 45.0
+        # Reset de tempo obrigatório ao começar uma nova ronda como atacante
+        atk_obj = self.get_player_by_id(self.current_player_id)
+        atk_obj["time"] = 45.0
         
-        self.root.after(1000, self.render_arena)
+        self.root.after(800, self.render_arena)
+
+    def get_player_by_id(self, pid):
+        return next(p for p in self.players if p["id"] == pid)
 
     def render_arena(self):
         for w in self.root.winfo_children(): w.destroy()
@@ -3544,41 +3554,55 @@ class TheFloorGame:
         self.update_ui()
 
     def update_ui(self):
-        atk = next(p for p in self.players if p["id"] == self.current_player_id)
-        self.status_lbl.config(text=f"ATACANTE: {atk['name']} ({atk['time']:.1f}s)", fg=atk['color'])
-        for (r, c), btn in self.grid_widgets.items():
-            cell = self.board[r][c]
-            is_atk = cell["owner"]["id"] == self.current_player_id
-            btn.config(text=f"{cell['owner']['name']}\n{cell['cat'][:9]}", bg=cell['owner']['color'],
-                       highlightthickness=2 if is_atk else 0, highlightbackground="white")
+        atk = self.get_player_by_id(self.current_player_id)
+        self.status_lbl.config(text=f"ATACANTE: {atk['name']} | TEMPO: {atk['time']:.1f}s", fg=atk['color'])
+        
+        for r in range(10):
+            for c in range(10):
+                cell = self.board[r][c]
+                is_atk = cell["owner"]["id"] == self.current_player_id
+                self.grid_widgets[(r, c)].config(
+                    text=f"{cell['owner']['name']}\n{cell['cat'][:9]}", 
+                    bg=cell['owner']['color'],
+                    highlightthickness=2 if is_atk else 0,
+                    highlightbackground="white"
+                )
         
         top = sorted([p for p in self.players if p["active"]], key=lambda x: x["cells"], reverse=True)[:15]
         self.rank_lbl.config(text="RANKING m²\n\n" + "\n".join([f"{p['name']}: {p['cells']}" for p in top]))
 
     def on_click_cell(self, r, c):
-        target = self.board[r][c]
-        if target["owner"]["id"] == self.current_player_id: return
+        target_cell = self.board[r][c]
+        if target_cell["owner"]["id"] == self.current_player_id: return
         
-        # Lógica de Adjacência
+        # Verifica adjacência: o atacante só pode clicar em células vizinhas ao seu território
         adj = False
         for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
             nr, nc = r+dr, c+dc
             if 0 <= nr < 10 and 0 <= nc < 10:
-                if self.board[nr][nc]["owner"]["id"] == self.current_player_id: adj = True; break
+                if self.board[nr][nc]["owner"]["id"] == self.current_player_id:
+                    adj = True; break
         
-        if adj: self.start_duel(r, c)
-        else: messagebox.showwarning("Aviso", "Só podes atacar territórios vizinhos!")
+        if adj:
+            self.start_duel(r, c)
+        else:
+            messagebox.showwarning("Aviso", "Ataque apenas territórios vizinhos!")
 
     def start_duel(self, r, c):
         self.duel_active = True
         self.defender = self.board[r][c]["owner"]
-        self.attacker = next(p for p in self.players if p["id"] == self.current_player_id)
+        self.attacker = self.get_player_by_id(self.current_player_id)
+        
+        # O duelo é na categoria do território invadido (DEFENSOR)
         self.duel_cat = self.board[r][c]["cat"]
         self.turn_p = self.attacker
         
-        self.d_win = tk.Toplevel(self.root); self.d_win.geometry("500x500"); self.d_win.configure(bg=Theme.CARD); self.d_win.grab_set()
-        self.lbl_t = tk.Label(self.d_win, text="45.0", font=Theme.CLOCK, bg=Theme.CARD); self.lbl_t.pack(pady=20)
+        self.d_win = tk.Toplevel(self.root); self.d_win.geometry("500x550"); self.d_win.configure(bg=Theme.CARD); self.d_win.grab_set()
+        
+        tk.Label(self.d_win, text=f"CATEGORIA: {self.duel_cat}", font=("Segoe UI", 14, "bold"), bg=Theme.CARD, fg=Theme.ACCENT).pack(pady=10)
+        self.lbl_t = tk.Label(self.d_win, text="45.0", font=Theme.CLOCK, bg=Theme.CARD); self.lbl_t.pack(pady=10)
         self.lbl_q = tk.Label(self.d_win, text="", font=("Segoe UI", 13), fg="white", bg=Theme.CARD, wraplength=420); self.lbl_q.pack(pady=20)
+        
         self.ent = tk.Entry(self.d_win, font=("Segoe UI", 20), justify="center"); self.ent.pack(pady=10); self.ent.focus_set()
         self.ent.bind("<Return>", lambda e: self.check_answer())
         
@@ -3600,7 +3624,8 @@ class TheFloorGame:
         if self.ent.get().strip().lower() == self.curr_q['resposta'].lower():
             self.turn_p = self.defender if self.turn_p == self.attacker else self.attacker
             self.next_question()
-        else: self.ent.delete(0, tk.END)
+        else:
+            self.ent.delete(0, tk.END)
 
     def duel_loop(self):
         if not self.duel_active: return
@@ -3611,33 +3636,46 @@ class TheFloorGame:
         if self.turn_p["time"] <= 0:
             winner = self.defender if self.turn_p == self.attacker else self.attacker
             self.resolve_duel(winner)
-        else: self.d_win.after(50, self.duel_loop)
+        else:
+            self.d_win.after(50, self.duel_loop)
 
     def resolve_duel(self, winner):
         self.duel_active = False
         loser = self.defender if winner == self.attacker else self.attacker
-        messagebox.showinfo("Vitória", f"{winner['name']} venceu o duelo!")
+        messagebox.showinfo("Fim do Duelo", f"VENCEDOR: {winner['name']}")
         
+        # 1. Identificar a categoria do vencedor (a que ele já possuía no tabuleiro)
+        winner_main_cat = ""
+        for row in self.board:
+            for cell in row:
+                if cell["owner"]["id"] == winner["id"]:
+                    winner_main_cat = cell["cat"]
+                    break
+        
+        # 2. Transferir território e substituir a categoria pela do vencedor
         for r in range(10):
             for c in range(10):
-                if self.board[r][c]["owner"]["id"] == loser["id"]: self.board[r][c]["owner"] = winner
+                if self.board[r][c]["owner"]["id"] == loser["id"]:
+                    self.board[r][c]["owner"] = winner
+                    self.board[r][c]["cat"] = winner_main_cat # Categoria perdedora é eliminada
         
         loser["active"] = False
         self.d_win.destroy()
         
+        # Atualiza contagem de células
         for p in self.players:
             p["cells"] = sum(1 for r in range(10) for c in range(10) if self.board[r][c]["owner"]["id"] == p["id"])
         
-        # --- A REGRA QUE PEDISTE ---
+        # 3. Decisão de continuar ou passar
         if winner == self.attacker:
             if messagebox.askyesno("Estratégia", "Deseja continuar a atacar? (O tempo voltará a 45s)"):
-                winner["time"] = 45.0  # RESET DO TEMPO PARA 45
+                winner["time"] = 45.0
                 self.current_player_id = winner["id"]
                 self.update_ui()
             else:
                 self.pick_random_attacker()
         else:
-            # Se o defensor ganhou, o novo atacante será sorteado (e terá 45s no pick_random_attacker)
+            # Se o defensor ganhou, ele torna-se o novo dono do território, mas a vez de atacar passa para outro sorteado
             self.pick_random_attacker()
 
 if __name__ == "__main__":
