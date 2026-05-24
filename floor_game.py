@@ -6,6 +6,7 @@ import json
 import os
 import csv
 import threading
+import re
 import matplotlib
 matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
@@ -163,7 +164,13 @@ class AIJudge:
                 messages=[{'role': 'user', 'content': prompt}],
                 format='json'
             )
-            dados_resposta = json.loads(response['message']['content'])
+            content = response['message']['content'].strip()
+            
+            # Sanitização extra: Remove marcações Markdown comuns vindas de LLMs locais
+            content = re.sub(r'^```json\s*', '', content, flags=re.IGNORECASE)
+            content = re.sub(r'\s*```$', '', content)
+            
+            dados_resposta = json.loads(content)
             status = dados_resposta.get("resultado", "INCORRETO").strip().upper()
             return "CORRETO" in status
         except Exception as e:
@@ -186,7 +193,7 @@ def carregar_base_dados():
                 {"pergunta": "Quem chegou à Índia em 1498?", "resposta": "Vasco da Gama"},
                 {"pergunta": "Em que ano ocorreu a Revolution dos Cravos?", "resposta": "1974"}
             ],
-            "Geografia do Continente Europeu": [
+            "Geografia do Continent Europeu": [
                 {"pergunta": "Qual a capital da França?", "resposta": "Paris"},
                 {"pergunta": "Qual o maior rio que passa em Lisboa?", "resposta": "Tejo"}
             ]
@@ -231,6 +238,7 @@ class TheFloorGame:
         self.dados_base, self.pilhas = carregar_base_dados()
         self.all_cats = list(self.dados_base.keys())
         self.grid_widgets = {}
+        self.ranking_widgets = [] # Cache de controle para evitar leak de memória
         self.loop_id = None  
         self.current_save_slot = None
         
@@ -298,9 +306,6 @@ class TheFloorGame:
                 
         tk.Button(frame, text="VOLTAR AO MENU", font=("Segoe UI", 11, "bold"), bg=Theme.WARN, fg="black", command=self.main_menu, padx=20, pady=5).pack(pady=30)
 
-    # =================================================================
-    # MENU DE ESTATÍSTICAS COM 2D SCROLL INTEGRADO
-    # =================================================================
     def menu_estatisticas(self):
         for w in self.root.winfo_children(): w.destroy()
         
@@ -394,6 +399,11 @@ class TheFloorGame:
         
         canvas_graficos.create_window((0, 0), window=scrollable_frame_graficos, anchor="nw")
         
+        # Suporte a Scroll do Rato na Central de Estatísticas
+        def _on_mousewheel_stats(event):
+            canvas_graficos.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas_graficos.bind_all("<MouseWheel>", _on_mousewheel_stats)
+        
         right_container.grid_rowconfigure(0, weight=1)
         right_container.grid_columnconfigure(0, weight=1)
         
@@ -431,7 +441,6 @@ class TheFloorGame:
                 tk.Label(box, text=f"{tit_grafico}\n\n[Gráfico pendente]\nInicie uma competição ou jogue uma ronda para gerar os dados.", 
                          font=("Segoe UI", 11, "italic"), fg="#777777", bg=Theme.CARD, width=42, height=14).pack(pady=30)
 
-
     # =================================================================
     # PERSISTÊNCIA DE DADOS (JSON INTEGRADO)
     # =================================================================
@@ -450,7 +459,7 @@ class TheFloorGame:
             tk.Button(d_save, text=f"Slot {slot} {status}", font=("Segoe UI", 11), bg=Theme.BG, fg="white", width=25,
                       command=lambda s=slot: [self.executar_salvamento(s), d_save.destroy()]).pack(pady=8)
 
-    def ejecutar_salvamento(self, slot):
+    def executar_salvamento(self, slot):
         path = os.path.join(SAVE_DIR, f"save_slot_{slot}.json")
         try:
             board_data = []
@@ -594,8 +603,10 @@ class TheFloorGame:
             return
             
         for w in self.root.winfo_children(): w.destroy()
+        self.ranking_widgets.clear() # Limpa o cache antigo
         
-        side_frame = tk.Frame(self.root, width=380, bg=Theme.CARD)
+        # Ajustado para 450 para comportar o nome das categorias perfeitamente
+        side_frame = tk.Frame(self.root, width=450, bg=Theme.CARD)
         side_frame.pack(side="right", fill="y")
         side_frame.pack_propagate(False)
         
@@ -607,7 +618,7 @@ class TheFloorGame:
         tk.Button(utils_frame, text="↩ RETORNAR AO MENU", font=("Segoe UI", 10, "bold"), bg="#2a1a1a", fg=Theme.WARN, 
                   command=self.main_menu).pack(fill="x", pady=4)
         
-        tk.Label(side_frame, text="RANKING COMPLETO (m²)", font=("Segoe UI", 13, "bold"), bg=Theme.CARD, fg=Theme.ACCENT).pack(pady=10)
+        tk.Label(side_frame, text="RANKING COMPLETO (m²) & CATEGORIAS", font=("Segoe UI", 13, "bold"), bg=Theme.CARD, fg=Theme.ACCENT).pack(pady=10)
         container = tk.Frame(side_frame, bg=Theme.CARD)
         container.pack(fill="both", expand=True)
         
@@ -617,6 +628,12 @@ class TheFloorGame:
         self.scrollable_rank.bind("<Configure>", lambda e: self.rank_canvas.configure(scrollregion=self.rank_canvas.bbox("all")))
         self.rank_canvas.create_window((0, 0), window=self.scrollable_rank, anchor="nw")
         self.rank_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Adiciona rolagem do rato no menu de ranking lateral
+        def _on_mousewheel_rank(event):
+            self.rank_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        self.rank_canvas.bind_all("<MouseWheel>", _on_mousewheel_rank)
+        
         self.rank_canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
@@ -657,15 +674,44 @@ class TheFloorGame:
                 else:
                     self.grid_widgets[(r, c)].config(text=txt, bg=bg_color, fg="white", highlightthickness=0, relief="flat")
         
-        for w in self.scrollable_rank.winfo_children(): 
-            w.destroy()
-            
+        # IMPLEMENTAÇÃO DO MENU DINÂMICO DE CATEGORIAS E RANKING (Otimizado sem vazamento de memória)
         ranked = sorted([p for p in self.players if p["active"]], key=lambda x: x["cells"], reverse=True)
+        
+        # Reutilizar ou criar frames para evitar sobrecarga do Tkinter
         for i, p in enumerate(ranked):
-            item = tk.Frame(self.scrollable_rank, bg=Theme.CARD, pady=4)
-            item.pack(fill="x", padx=5)
-            tk.Label(item, text=f"#{i+1} J{p['id']} ({p['cells']} m²)", font=("Segoe UI", 10, "bold"), fg="white", bg=Theme.CARD).pack(side="left")
-            tk.Frame(item, bg=p['color'], width=15, height=15).pack(side="right", padx=5)
+            # Procura a categoria atual real do que ele defende no tabuleiro
+            categoria_atual = "Eliminado"
+            for r in range(GRID_SIZE):
+                for c in range(GRID_SIZE):
+                    if self.board[r][c]["owner"]["id"] == p["id"]:
+                        categoria_atual = self.board[r][c]["cat"]
+                        break
+                if categoria_atual != "Eliminado": break
+
+            texto_ranking = f"#{i+1} J{p['id']} ({p['cells']} m²) - {categoria_atual}"
+            
+            if i < len(self.ranking_widgets):
+                # Atualiza item existente
+                item_frame, lbl_text, color_badge = self.ranking_widgets[i]
+                lbl_text.config(text=texto_ranking)
+                color_badge.config(bg=p['color'])
+            else:
+                # Instancia novo item caso a lista cresça
+                item = tk.Frame(self.scrollable_rank, bg=Theme.CARD, pady=4)
+                item.pack(fill="x", padx=5)
+                
+                lbl = tk.Label(item, text=texto_ranking, font=("Segoe UI", 9, "bold"), fg="white", bg=Theme.CARD, anchor="w")
+                lbl.pack(side="left", fill="x", expand=True)
+                
+                badge = tk.Frame(item, bg=p['color'], width=15, height=15)
+                badge.pack(side="right", padx=5)
+                
+                self.ranking_widgets.append((item, lbl, badge))
+                
+        # Remove excedentes se houver menos jogadores ativos do que o cache guardou
+        while len(self.ranking_widgets) > len(ranked):
+            item_frame, _, _ = self.ranking_widgets.pop()
+            item_frame.destroy()
 
     def on_click_cell(self, r, c):
         if self.duel_active:
@@ -867,6 +913,10 @@ class TheFloorGame:
             # Resposta errada força nova pergunta para o mesmo jogador (perda de tempo por erro)
             self.proxima_pergunta()
 
+    def pasar_pergunta(self):
+        # Correção do nome interno chamado pelo botão (passar_pergunta)
+        self.passar_pergunta()
+
     def passar_pergunta(self):
         if self.ia_checking or not self.duel_active:
             return
@@ -916,7 +966,7 @@ class TheFloorGame:
         # Lógica de escolha de continuidade para o Vencedor
         self.oferecer_escolha_continuidade(vencedor)
 
-    def oferecer_escolha_continuidade(self, vencedor):
+    def ofrecer_escolha_continuidade(self, vencedor):
         if self.verificar_fim_de_jogo():
             return
 
@@ -931,14 +981,12 @@ class TheFloorGame:
         tk.Label(self.choice_window, text=f"Parabéns JOGADOR {vencedor['id']}!", font=("Segoe UI", 14, "bold"), fg=Theme.ACCENT, bg=Theme.CARD).pack(pady=15)
         tk.Label(self.choice_window, text="O que desejas fazer de seguida?", font=("Segoe UI", 11), fg=Theme.TEXT, bg=Theme.CARD).pack(pady=5)
         
-        btn_style = {"font": ("Segoe UI", 11, "bold"), "fg": "black", "pady": 8, "cursor": "hand2", "width": 35}
-        
         # Opção 1: Continuar no palco com o ID vencedor
-        tk.Button(self.choice_window, text="CONTINUAR NO PALCO (ATACAR OUTRO)", bg="#00FF66",
+        tk.Button(self.choice_window, text="CONTINUAR NO PALCO (ATACAR OUTRO)", font=("Segoe UI", 11, "bold"), bg="#00FF66", fg="black", pady=8, cursor="hand2", width=35,
                   command=lambda: self.decidir_fluxo_continuidade(vencedor["id"], continuar=True)).pack(pady=8)
                   
         # Opção 2: Voltar para o tabuleiro e sortear um novo atacante aleatório
-        tk.Button(self.choice_window, text="REGRESSAR AO TABULEIRO (SORTEIO ALEATÓRIO)", bg=Theme.WARN,
+        tk.Button(self.choice_window, text="REGRESSAR AO TABULEIRO (SORTEIO ALEATÓRIO)", font=("Segoe UI", 11, "bold"), bg=Theme.WARN, fg="black", pady=8, cursor="hand2", width=35,
                   command=lambda: self.decidir_fluxo_continuidade(vencedor["id"], continuar=False)).pack(pady=8)
 
     def decidir_fluxo_continuidade(self, vencedor_id, continuar):
