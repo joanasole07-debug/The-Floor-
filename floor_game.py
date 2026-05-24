@@ -138,9 +138,15 @@ class AIJudge:
         if not resp_utilizador_clean:
             return False
 
+        # --- CORREÇÃO AQUI ---
+        # Removida a limitação de tamanho (len > 2) para permitir respostas curtas (como 'a', 'b', '1', 'tejo')
+        if resp_utilizador_clean == resp_esperada_clean:
+            return True
+            
+        # Manter a lógica de contenção para sinónimos/abreviações
         if resp_utilizador_clean in resp_esperada_clean or resp_esperada_clean in resp_utilizador_clean:
-            if len(resp_utilizador_clean) > 2:
-                return True
+            return True
+        # ---------------------
 
         prompt = f"""
         Atuas como um juiz tolerante e inteligente de um jogo de trivia em Português.
@@ -149,9 +155,8 @@ class AIJudge:
         Resposta do jogador: "{resposta_utilizador}"
 
         REGRAS DE VALIDAÇÃO:
-        1. Sê tolerante! Se o jogador simplificou a resposta, deves aceitar como CORRETO (Ex: Gabarito é 'AC Milan' e o jogador disse 'Milan'; Gabarito é 'Vasco da Gama' e o jogador disse 'Vasco').
-        2. Aceita sinónimos óbvios, abreviações populares, omissão de artigos (o, a, os, as) ou pequenos erros de digitação.
-        3. Só deves retirar a razão se a resposta for factualmente diferente ou errada.
+        1. Sê tolerante! Aceita respostas curtas, como palavras únicas.
+        2. Aceita sinónimos óbvios, abreviações populares ou pequenos erros de digitação.
         
         Deves responder OBRIGATORIAMENTE no formato JSON abaixo:
         {{
@@ -166,7 +171,6 @@ class AIJudge:
             )
             content = response['message']['content'].strip()
             
-            # Sanitização extra: Remove marcações Markdown comuns vindas de LLMs locais
             content = re.sub(r'^```json\s*', '', content, flags=re.IGNORECASE)
             content = re.sub(r'\s*```$', '', content)
             
@@ -238,13 +242,14 @@ class TheFloorGame:
         self.dados_base, self.pilhas = carregar_base_dados()
         self.all_cats = list(self.dados_base.keys())
         self.grid_widgets = {}
-        self.ranking_widgets = [] # Cache de controle para evitar leak de memória
+        self.ranking_widgets = [] 
         self.loop_id = None  
         self.current_save_slot = None
         
         self.ia_checking = False
         self.duel_active = False
-        
+        self.aguardando_decisao = False # Flag para bloquear tabuleiro pós-duelo
+        self.action_lock = threading.Lock()
         self.main_menu()
 
     def main_menu(self):
@@ -320,7 +325,6 @@ class TheFloorGame:
         paned_window = tk.PanedWindow(self.root, orient="horizontal", bg=Theme.BG, bd=0, sashwidth=6)
         paned_window.pack(fill="both", expand=True, padx=15, pady=15)
 
-        # PAINEL ESQUERDO: TABELA DO FICHEIRO CSV
         left_frame = tk.Frame(paned_window, bg=Theme.CARD, padx=10, pady=10)
         paned_window.add(left_frame, width=540)
         
@@ -376,7 +380,6 @@ class TheFloorGame:
         else:
             tree.insert("", "end", values=("N/A", "Nenhum jogo registado ainda", "-", "-", "-", "-", "-", "-"))
 
-        # PAINEL DIREITO: SCROLL 2D
         right_container = tk.Frame(paned_window, bg=Theme.CARD)
         paned_window.add(right_container, width=740)
         
@@ -399,7 +402,6 @@ class TheFloorGame:
         
         canvas_graficos.create_window((0, 0), window=scrollable_frame_graficos, anchor="nw")
         
-        # Suporte a Scroll do Rato na Central de Estatísticas
         def _on_mousewheel_stats(event):
             canvas_graficos.yview_scroll(int(-1*(event.delta/120)), "units")
         canvas_graficos.bind_all("<MouseWheel>", _on_mousewheel_stats)
@@ -438,16 +440,21 @@ class TheFloorGame:
                 except Exception as img_err:
                     tk.Label(box, text=f"[Erro ao renderizar gráfico: {img_err}]", fg="#FF3333", bg=Theme.CARD).pack(pady=50)
             else:
-                tk.Label(box, text=f"{tit_grafico}\n\n[Gráfico pendente]\nInicie uma competição ou jogue uma ronda para gerar os dados.", 
+                tk.Label(box, text=f"{tit_grafico}\n\n[Gráfico pendente]\nInicie uma competição ou jogue uma ronda para generate os dados.", 
                          font=("Segoe UI", 11, "italic"), fg="#777777", bg=Theme.CARD, width=42, height=14).pack(pady=30)
 
     # =================================================================
     # PERSISTÊNCIA DE DADOS (JSON INTEGRADO)
     # =================================================================
     def salvar_jogo_caixa_dialogo(self):
+        # Bloqueia abrir a janela de salvar se estivermos num momento crítico (ex: duelo ou decisão)
+        if self.aguardando_decisao or self.duel_active:
+            messagebox.showwarning("Aviso", "Não é possível salvar durante um duelo ou decisão pendente.")
+            return
+            
         d_save = tk.Toplevel(self.root)
         d_save.title("GRAVAR JOGO")
-        d_save.geometry("400x300")
+        d_save.geometry("400x350")
         d_save.configure(bg=Theme.CARD)
         d_save.grab_set()
         
@@ -456,8 +463,48 @@ class TheFloorGame:
         for slot in range(1, 4):
             path = os.path.join(SAVE_DIR, f"save_slot_{slot}.json")
             status = "[Utilizado]" if os.path.exists(path) else "[Livre]"
+            
+            # Usamos uma função local para garantir que o slot é capturado corretamente
+            def salvar_acao(s=slot):
+                self.executar_salvamento(s)
+                d_save.destroy()
+            
             tk.Button(d_save, text=f"Slot {slot} {status}", font=("Segoe UI", 11), bg=Theme.BG, fg="white", width=25,
-                      command=lambda s=slot: [self.executar_salvamento(s), d_save.destroy()]).pack(pady=8)
+                      command=salvar_acao).pack(pady=8)
+        
+        tk.Button(d_save, text="CANCELAR", bg="#FF3333", fg="white", command=d_save.destroy).pack(pady=15)
+
+    def executar_salvamento(self, slot):
+        path = os.path.join(SAVE_DIR, f"save_slot_{slot}.json")
+        try:
+            # Serialização robusta do estado do tabuleiro
+            board_data = []
+            for r in range(GRID_SIZE):
+                row_data = []
+                for c in range(GRID_SIZE):
+                    row_data.append({
+                        "owner_id": self.board[r][c]["owner"]["id"],
+                        "cat": self.board[r][c]["cat"]
+                    })
+                board_data.append(row_data)
+                
+            dados_totais = {
+                "metadata": {
+                    "data_hora": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "jogadores_ativos": sum(1 for p in self.players if p["active"])
+                },
+                "current_player_id": self.current_player_id,
+                "players": self.players,
+                "board": board_data
+            }
+            
+            # Escrita atómica simples
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(dados_totais, f, indent=4, ensure_ascii=False)
+            
+            messagebox.showinfo("Sucesso", f"O progresso foi guardado no Slot {slot}!")
+        except Exception as e:
+            messagebox.showerror("Erro de Gravação", f"Não foi possível guardar no disco:\n{e}")
 
     def executar_salvamento(self, slot):
         path = os.path.join(SAVE_DIR, f"save_slot_{slot}.json")
@@ -500,6 +547,7 @@ class TheFloorGame:
                 
             self.current_player_id = dados["current_player_id"]
             self.players = dados["players"]
+            self.aguardando_decisao = False
             
             mapa_players = {p["id"]: p for p in self.players}
             
@@ -541,6 +589,7 @@ class TheFloorGame:
         
         self.players = []
         self.board = []
+        self.aguardando_decisao = False
         idx = 1
         for r in range(GRID_SIZE):
             row = []
@@ -603,9 +652,8 @@ class TheFloorGame:
             return
             
         for w in self.root.winfo_children(): w.destroy()
-        self.ranking_widgets.clear() # Limpa o cache antigo
+        self.ranking_widgets.clear() 
         
-        # Ajustado para 450 para comportar o nome das categorias perfeitamente
         side_frame = tk.Frame(self.root, width=450, bg=Theme.CARD)
         side_frame.pack(side="right", fill="y")
         side_frame.pack_propagate(False)
@@ -629,7 +677,6 @@ class TheFloorGame:
         self.rank_canvas.create_window((0, 0), window=self.scrollable_rank, anchor="nw")
         self.rank_canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Adiciona rolagem do rato no menu de ranking lateral
         def _on_mousewheel_rank(event):
             self.rank_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         self.rank_canvas.bind_all("<MouseWheel>", _on_mousewheel_rank)
@@ -639,8 +686,14 @@ class TheFloorGame:
 
         main = tk.Frame(self.root, bg=Theme.BG)
         main.pack(expand=True, fill="both")
-        self.status_lbl = tk.Label(main, font=("Segoe UI", 20, "bold"), bg=Theme.BG)
-        self.status_lbl.pack(pady=5)
+        
+        # ÁREA DE ESTADO NATIVA (Onde injetamos os botões de fluxo)
+        self.header_frame = tk.Frame(main, bg=Theme.BG, height=80)
+        self.header_frame.pack(fill="x", pady=10)
+        self.header_frame.pack_propagate(False)
+
+        self.status_lbl = tk.Label(self.header_frame, font=("Segoe UI", 20, "bold"), bg=Theme.BG)
+        self.status_lbl.pack(expand=True)
         
         grid_f = tk.Frame(main, bg=Theme.BG)
         grid_f.pack(expand=True)
@@ -651,13 +704,16 @@ class TheFloorGame:
                                 command=lambda r=r, c=c: self.on_click_cell(r, c))
                 btn.grid(row=r, column=c, padx=2, pady=2)
                 self.grid_widgets[(r, c)] = btn
+                
         self.update_ui()
 
     def update_ui(self):
         atk = self.get_player_by_id(self.current_player_id)
         if not atk:
             return
-        self.status_lbl.config(text=f"NO PALCO: J {atk['id']} | {atk['main_cat'].upper()} | {atk['time']:.1f}s", fg=atk['color'])
+            
+        if not self.aguardando_decisao:
+            self.status_lbl.config(text=f"NO PALCO: J {atk['id']} | {atk['main_cat'].upper()} | {atk['time']:.1f}s", fg=atk['color'])
         
         for r in range(GRID_SIZE):
             for c in range(GRID_SIZE):
@@ -674,12 +730,9 @@ class TheFloorGame:
                 else:
                     self.grid_widgets[(r, c)].config(text=txt, bg=bg_color, fg="white", highlightthickness=0, relief="flat")
         
-        # IMPLEMENTAÇÃO DO MENU DINÂMICO DE CATEGORIAS E RANKING (Otimizado sem vazamento de memória)
         ranked = sorted([p for p in self.players if p["active"]], key=lambda x: x["cells"], reverse=True)
         
-        # Reutilizar ou criar frames para evitar sobrecarga do Tkinter
         for i, p in enumerate(ranked):
-            # Procura a categoria atual real do que ele defende no tabuleiro
             categoria_atual = "Eliminado"
             for r in range(GRID_SIZE):
                 for c in range(GRID_SIZE):
@@ -691,12 +744,10 @@ class TheFloorGame:
             texto_ranking = f"#{i+1} J{p['id']} ({p['cells']} m²) - {categoria_atual}"
             
             if i < len(self.ranking_widgets):
-                # Atualiza item existente
                 item_frame, lbl_text, color_badge = self.ranking_widgets[i]
                 lbl_text.config(text=texto_ranking)
                 color_badge.config(bg=p['color'])
             else:
-                # Instancia novo item caso a lista cresça
                 item = tk.Frame(self.scrollable_rank, bg=Theme.CARD, pady=4)
                 item.pack(fill="x", padx=5)
                 
@@ -708,13 +759,12 @@ class TheFloorGame:
                 
                 self.ranking_widgets.append((item, lbl, badge))
                 
-        # Remove excedentes se houver menos jogadores ativos do que o cache guardou
         while len(self.ranking_widgets) > len(ranked):
             item_frame, _, _ = self.ranking_widgets.pop()
             item_frame.destroy()
 
     def on_click_cell(self, r, c):
-        if self.duel_active:
+        if self.duel_active or self.aguardando_decisao:
             return
             
         target_cell = self.board[r][c]
@@ -725,7 +775,6 @@ class TheFloorGame:
             messagebox.showwarning("Aviso", "Não podes atacar o teu próprio território!")
             return
             
-        # Verificar vizinhança (se a célula clicada faz fronteira com o atacante)
         is_neighbor = False
         for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
             nr, nc = r + dr, c + dc
@@ -746,7 +795,6 @@ class TheFloorGame:
     def iniciar_duelo(self, attacker, defender, categoria_duelo):
         self.duel_active = True
         
-        # Resetar timers de duelo
         attacker["time"] = 45.0
         defender["time"] = 45.0
         
@@ -755,60 +803,52 @@ class TheFloorGame:
         self.duel_window.state('zoomed')
         self.duel_window.configure(bg=Theme.BG)
         self.duel_window.grab_set()
-        
-        # Bloquear fecho acidental
+        self.lbl_resposta = tk.Label(self.duel_window, text="", font=("Segoe UI", 12, "bold"), bg="#05070A")
+        self.lbl_resposta.pack(pady=10)
         self.duel_window.protocol("WM_DELETE_WINDOW", lambda: None)
         
-        # Painel Superior de Categoria
         cat_frame = tk.Frame(self.duel_window, bg=Theme.CARD, height=60)
         cat_frame.pack(fill="x", side="top")
         tk.Label(cat_frame, text=f"CATEGORIA EM DISPUTA: {categoria_duelo.upper()}", font=("Segoe UI", 16, "bold"), fg=Theme.ACCENT, bg=Theme.CARD).pack(pady=15)
         
-        # Área Central Split (Cronómetros)
         timers_frame = tk.Frame(self.duel_window, bg=Theme.BG)
         timers_frame.pack(fill="x", pady=20)
         
-        # Atacante
         self.atk_box = tk.Frame(timers_frame, bg=Theme.CARD, padx=20, pady=10)
         self.atk_box.pack(side="left", expand=True, fill="both", padx=40)
         tk.Label(self.atk_box, text=f"ATACANTE (J{attacker['id']})", font=("Segoe UI", 12, "bold"), fg="white", bg=Theme.CARD).pack()
-        self.atk_clock = tk.Label(self.atk_box, text="45.0", font=Theme.CLOCK, fg="#00FF66", bg=Theme.CARD)
+        self.atk_clock = tk.Label(self.atk_box, text=f"{attacker['time']:.1f}", font=Theme.CLOCK, fg="#00FF66", bg=Theme.CARD)
         self.atk_clock.pack(pady=5)
         
-        # Defensor
         self.def_box = tk.Frame(timers_frame, bg=Theme.CARD, padx=20, pady=10)
         self.def_box.pack(side="right", expand=True, fill="both", padx=40)
         tk.Label(self.def_box, text=f"DEFENSOR (J{defender['id']})", font=("Segoe UI", 12, "bold"), fg="white", bg=Theme.CARD).pack()
-        self.def_clock = tk.Label(self.def_box, text="45.0", font=Theme.CLOCK, fg="#00FF66", bg=Theme.CARD)
+        self.def_clock = tk.Label(self.def_box, text=f"{defender['time']:.1f}", font=Theme.CLOCK, fg="#00FF66", bg=Theme.CARD)
         self.def_clock.pack(pady=5)
         
-        # Zona da Pergunta Ativa
         self.qa_frame = tk.Frame(self.duel_window, bg=Theme.CARD, pady=20, padx=20, highlightbackground="#222", highlightthickness=1)
         self.qa_frame.pack(fill="both", expand=True, padx=40, pady=10)
         
         self.lbl_turno_de = tk.Label(self.qa_frame, text="", font=("Segoe UI", 14, "bold"), bg=Theme.CARD)
         self.lbl_turno_de.pack()
         
-        self.lbl_pergunta = tk.Label(self.qa_frame, text="Preparar Palco...", font=("Segoe UI", 16), fg=Theme.TEXT, bg=Theme.CARD, wraplength=800, justify="center")
+        self.lbl_pergunta = tk.Label(self.qa_frame, text="", font=("Segoe UI", 16), fg=Theme.TEXT, bg=Theme.CARD, wraplength=800, justify="center")
         self.lbl_pergunta.pack(pady=20)
         
-        # Input de resposta
         self.entry_resposta = tk.Entry(self.qa_frame, font=("Segoe UI", 16), bg=Theme.BG, fg="white", insertbackground="white", justify="center", width=40)
         self.entry_resposta.pack(pady=10)
         self.entry_resposta.bind("<Return>", lambda e: self.submeter_resposta())
         self.entry_resposta.config(state="disabled")
         
-        # Botões de Controlo
         ctrl_frame = tk.Frame(self.qa_frame, bg=Theme.CARD)
         ctrl_frame.pack(pady=10)
         
         self.btn_responder = tk.Button(ctrl_frame, text="✓ ENVIAR (ENTER)", font=("Segoe UI", 11, "bold"), bg="#00FF66", fg="black", command=self.submeter_resposta, state="disabled", width=18)
         self.btn_responder.pack(side="left", padx=10)
         
-        self.btn_passar = tk.Button(ctrl_frame, text="⏭ PASSAR / SKIP (-3s)", font=("Segoe UI", 11, "bold"), bg=Theme.WARN, fg="black", command=self.passar_pergunta, state="disabled", width=18)
+        self.btn_passar = tk.Button(ctrl_frame, text="⏭ PASSAR / SKIP (-5s)", font=("Segoe UI", 11, "bold"), bg=Theme.WARN, fg="black", command=self.passar_pergunta, state="disabled", width=18)
         self.btn_passar.pack(side="left", padx=10)
         
-        # Configurações internas do duelo
         self.p_atual = attacker
         self.p_passivo = defender
         self.atk_ref = attacker
@@ -816,12 +856,9 @@ class TheFloorGame:
         self.cat_duelo = categoria_duelo
         self.pergunta_ativa = None
         
-        # Iniciar loop de contagem decrescente
+        self.proxima_pergunta()
         self.last_time = time.time()
         self.duelo_loop()
-        
-        # Carregar primeira pergunta após uma breve pausa
-        self.duel_window.after(1500, self.proxima_pergunta)
 
     def duelo_loop(self):
         if not self.duel_active:
@@ -846,7 +883,6 @@ class TheFloorGame:
         self.atk_clock.config(text=f"{self.atk_ref['time']:.1f}")
         self.def_clock.config(text=f"{self.def_ref['time']:.1f}")
         
-        # Alertas visuais de tempo crítico
         if self.atk_ref["time"] < 10: self.atk_clock.config(fg="#FF3333")
         if self.def_ref["time"] < 10: self.def_clock.config(fg="#FF3333")
 
@@ -860,7 +896,6 @@ class TheFloorGame:
         self.btn_responder.config(state="normal")
         self.btn_passar.config(state="normal")
         
-        # Destacar visualmente de quem é o turno
         if self.p_atual["id"] == self.atk_ref["id"]:
             self.atk_box.config(highlightbackground=Theme.ACCENT, highlightthickness=3)
             self.def_box.config(highlightthickness=0)
@@ -874,11 +909,16 @@ class TheFloorGame:
         self.lbl_pergunta.config(text=self.pergunta_ativa["pergunta"])
 
     def submeter_resposta(self):
-        if self.ia_checking or not self.duel_active:
-            return
+        if not self.action_lock.acquire(blocking=False):
+            return # Bloqueia se já houver uma ação em curso
+            
+        # Garante que liberamos o lock no final da verificação
+        def finalizar_processo():
+            self.action_lock.release()
             
         resp = self.entry_resposta.get().strip()
         if not resp:
+            finalizar_processo()
             return
             
         self.ia_checking = True
@@ -886,16 +926,14 @@ class TheFloorGame:
         self.btn_responder.config(state="disabled")
         self.btn_passar.config(state="disabled")
         
-        # Executar validação em Thread separada para não congelar o cronómetro/UI
-        threading.Thread(target=self.thread_validar_resposta, args=(resp,), daemon=True).start()
+        # Thread mantém o lock até terminar
+        threading.Thread(target=lambda: (self.thread_validar_resposta(resp), finalizar_processo()), daemon=True).start()
 
     def thread_validar_resposta(self, resposta_utilizador):
         pergunta = self.pergunta_ativa["pergunta"]
         gabarito = self.pergunta_ativa["resposta"]
         
         correto = AIJudge.verificar_resposta(pergunta, gabarito, resposta_utilizador)
-        
-        # Sincronizar de volta com a Main Thread do Tkinter
         self.duel_window.after(0, lambda: self.processar_resultado_validacao(correto))
 
     def processar_resultado_validacao(self, correto):
@@ -904,34 +942,75 @@ class TheFloorGame:
             return
             
         if correto:
+            # Resposta certa: troca de jogador e carrega uma PERGUNTA NOVA
             self.p_atual["certas"] += 1
-            # Inverter turnos
             self.p_atual, self.p_passivo = self.p_passivo, self.p_atual
             self.proxima_pergunta()
         else:
+            # Resposta errada: aplica penalização e NÃO troca de pergunta
             self.p_atual["erradas"] += 1
-            # Resposta errada força nova pergunta para o mesmo jogador (perda de tempo por erro)
-            self.proxima_pergunta()
-
-    def pasar_pergunta(self):
-        # Correção do nome interno chamado pelo botão (passar_pergunta)
-        self.passar_pergunta()
+            
+            # (Opcional) Podes adicionar aqui uma mensagem visual ou som de erro
+            # O código para de chamar self.proxima_pergunta() aqui,
+            # logo a pergunta atual permanece no ecrã.
+            
+            # Apenas reabilitamos os botões para ele tentar de novo
+            self.entry_resposta.config(state="normal")
+            self.btn_responder.config(state="normal")
+            self.btn_passar.config(state="normal")
 
     def passar_pergunta(self):
-        if self.ia_checking or not self.duel_active:
-            return
-            
-        # Penalização por Skip: -3 segundos
-        self.p_atual["time"] = max(0, self.p_atual["time"] - 3.0)
-        self.p_atual["erradas"] += 1 # Conta como erro para fins estatísticos
-        self.atualizar_clocks_interface()
+        # Tentativa de adquirir o lock para evitar sobreposição
+        if not self.action_lock.acquire(blocking=False):
+            return 
         
-        if self.p_atual["time"] <= 0:
-            self.finalizar_duelo_por_timeout()
-            return
+        try:
+            if not self.duel_active:
+                return
             
-        self.proxima_pergunta()
+            # Penalização
+            self.p_atual["time"] = max(0, self.p_atual["time"] - 5.0)
+            self.p_atual["erradas"] += 1 
+            self.atualizar_clocks_interface()
+            
+            # Feedback visual
+            resposta_certa = self.pergunta_ativa.get("resposta", "Sem resposta")
+            self.lbl_resposta.config(text=f"A RESPOSTA ERA: {resposta_certa}", fg="#FFCC00")
+            
+            # Avançar
+            self.proxima_pergunta()
+            
+            # Limpeza
+            self.duel_window.after(2000, lambda: self.lbl_resposta.config(text=""))
+            
+        finally:
+            self.action_lock.release()
+        
+        # 5. Limpeza controlada usando a própria janela de duelo
+        def reset_state():
+            if self.duel_active: # Verifica se a janela ainda existe
+                self.lbl_resposta.config(text="")
+            self.is_skipping = False 
 
+        # Usar self.duel_window.after garante que o timer morra com a janela
+        self.duel_window.after(2000, reset_state)
+        
+        # Limpeza após 2 segundos
+        def reset_skip_flag():
+            if hasattr(self, 'lbl_resposta'):
+                self.lbl_resposta.config(text="")
+            self.is_skipping = False 
+
+        self.duel_window.after(2000, reset_skip_flag)
+        
+        # 5. LIMPEZA DA RESPOSTA E DESBLOQUEIO
+        # A pergunta nova mantém-se, a resposta da anterior desaparece após 2.5s
+        def limpar_resposta():
+            if hasattr(self, 'lbl_resposta'):
+                self.lbl_resposta.config(text="")
+            self.is_skipping = False # Permite novo skip apenas após o tempo passar
+
+        self.root.after(2500, limpar_resposta)
     def finalizar_duelo_por_timeout(self):
         self.duel_active = False
         if self.loop_id:
@@ -945,52 +1024,73 @@ class TheFloorGame:
         
         messagebox.showinfo("FIM DO DUELO", f"O tempo do Jogador {derrotado['id']} esgotou!\n\nJOGADOR {vencedor['id']} VENCE O DUELO!")
         
-        # Transferência de Território
+        # CATEGORIA DO VENCEDOR (para unificar o território)
+        categoria_do_vencedor = vencedor["main_cat"]
+        
         celulas_conquistadas = 0
         for r in range(GRID_SIZE):
             for c in range(GRID_SIZE):
+                # Se a célula pertencia ao derrotado, passa a ser do vencedor
                 if self.board[r][c]["owner"]["id"] == derrotado["id"]:
                     self.board[r][c]["owner"] = vencedor
+                    # AQUI ESTÁ A MUDANÇA: Unificar o tema da célula
+                    self.board[r][c]["cat"] = categoria_do_vencedor
                     celulas_conquistadas += 1
                     
         vencedor["cells"] += celulas_conquistadas
         if vencedor["cells"] > vencedor["max_cells"]:
             vencedor["max_cells"] = vencedor["cells"]
             
-        # Atualizar ficheiros globais de estatísticas imediatamente
         StatsEngine.atualizar_e_salvar_graficos(self.players)
         StatsEngine.exportar_estatisticas_csv(self.players)
         
         self.duel_window.destroy()
-        
-        # Lógica de escolha de continuidade para o Vencedor
-        self.oferecer_escolha_continuidade(vencedor)
+        self.exibir_painel_decisao_nativo(vencedor)
 
-    def ofrecer_escolha_continuidade(self, vencedor):
-        if self.verificar_fim_de_jogo():
-            return
-
-        # Criar caixa de diálogo customizada para escolha do fluxo
-        self.choice_window = tk.Toplevel(self.root)
-        self.choice_window.title("DECISÃO DO VENCEDOR")
-        self.choice_window.geometry("450x250")
-        self.choice_window.configure(bg=Theme.CARD)
-        self.choice_window.grab_set()
-        self.choice_window.protocol("WM_DELETE_WINDOW", lambda: None)
+    # =================================================================
+    # FLUXO DE DECISÃO INTEGRADO DIRETAMENTE NA JANELA DO TABULEIRO
+    # =================================================================
+    def exibir_painel_decisao_nativo(self, vencedor):
+        """
+        Substitui apenas a Label de status no header pelo painel de decisão.
+        """
+        self.aguardando_decisao = True
         
-        tk.Label(self.choice_window, text=f"Parabéns JOGADOR {vencedor['id']}!", font=("Segoe UI", 14, "bold"), fg=Theme.ACCENT, bg=Theme.CARD).pack(pady=15)
-        tk.Label(self.choice_window, text="O que desejas fazer de seguida?", font=("Segoe UI", 11), fg=Theme.TEXT, bg=Theme.CARD).pack(pady=5)
-        
-        # Opção 1: Continuar no palco com o ID vencedor
-        tk.Button(self.choice_window, text="CONTINUAR NO PALCO (ATACAR OUTRO)", font=("Segoe UI", 11, "bold"), bg="#00FF66", fg="black", pady=8, cursor="hand2", width=35,
-                  command=lambda: self.decidir_fluxo_continuidade(vencedor["id"], continuar=True)).pack(pady=8)
-                  
-        # Opção 2: Voltar para o tabuleiro e sortear um novo atacante aleatório
-        tk.Button(self.choice_window, text="REGRESSAR AO TABULEIRO (SORTEIO ALEATÓRIO)", font=("Segoe UI", 11, "bold"), bg=Theme.WARN, fg="black", pady=8, cursor="hand2", width=35,
-                  command=lambda: self.decidir_fluxo_continuidade(vencedor["id"], continuar=False)).pack(pady=8)
+        # Limpa o header para colocar os botões
+        for w in self.header_frame.winfo_children(): 
+            w.destroy()
 
-    def decidir_fluxo_continuidade(self, vencedor_id, continuar):
-        self.choice_window.destroy()
+        # Caixa de decisão
+        decisao_box = tk.Frame(self.header_frame, bg="#10141D", pady=5, padx=20, 
+                               highlightbackground="#00F2FF", highlightthickness=1)
+        decisao_box.pack(fill="both", expand=True, padx=50)
+
+        # Texto informativo
+        tk.Label(decisao_box, text=f"O JOGADOR {vencedor['id']} VENCEU O DUELO!", 
+                 font=("Segoe UI", 12, "bold"), fg="white", bg="#10141D").pack(side="left", padx=20)
+
+        # Botão Continuar
+        tk.Button(decisao_box, text="⚔ CONTINUAR A ATACAR", font=("Segoe UI", 11, "bold"), 
+                  bg="#00FF66", fg="black", cursor="hand2", padx=15,
+                  command=lambda: self.processar_escolha_nativa(vencedor["id"], True)).pack(side="right", padx=10)
+
+        # Botão Retornar
+        tk.Button(decisao_box, text="🎲 NOVO SORTEIO", font=("Segoe UI", 11, "bold"), 
+                  bg="#FFCC00", fg="black", cursor="hand2", padx=15,
+                  command=lambda: self.processar_escolha_nativa(vencedor["id"], False)).pack(side="right", padx=10)
+
+    def processar_escolha_nativa(self, vencedor_id, continuar):
+        self.aguardando_decisao = False
+        
+        # Limpar o painel de botões e restaurar a Label de status padrão
+        for w in self.header_frame.winfo_children(): 
+            w.destroy()
+            
+        # Recria a Label de status padrão (como era antes)
+        self.status_lbl = tk.Label(self.header_frame, font=("Segoe UI", 20, "bold"), 
+                                   bg="#05070A", fg="white")
+        self.status_lbl.pack(expand=True)
+
         if continuar:
             self.current_player_id = vencedor_id
             self.render_arena()
